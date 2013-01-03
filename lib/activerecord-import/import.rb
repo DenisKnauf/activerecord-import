@@ -3,7 +3,7 @@ require "ostruct"
 module ActiveRecord::Import::ConnectionAdapters ; end
 
 module ActiveRecord::Import #:nodoc:
-  class Result < Struct.new(:failed_instances, :num_inserts)
+  class Result < Struct.new(:failed_instances, :num_inserts, :last_inserted_id)
   end
 
   module ImportSupport #:nodoc:
@@ -162,9 +162,10 @@ class ActiveRecord::Base
     #   BlogPost.import columns, attributes, :on_duplicate_key_update=>{ :title => :title } 
     #  
     # = Returns
-    # This returns an object which responds to +failed_instances+ and +num_inserts+.
+    # This returns an object which responds to +failed_instances+, +num_inserts+, +last_inserted_id+.
     # * failed_instances - an array of objects that fails validation and were not committed to the database. An empty array if no validation is performed.
-    # * num_inserts - the number of insert statements it took to import the data
+    # * num_inserts - the number of insert statements it took to import the data.
+    # * last_inserted_id - the last inserted id. Should be the id of the latest inserted row.
     def import( *args )
       options = { :validate=>true, :timestamps=>true }
       options.merge!( args.pop ) if args.last.is_a? Hash
@@ -191,7 +192,7 @@ class ActiveRecord::Base
         end
         # supports empty array
       elsif args.last.is_a?( Array ) and args.last.empty?
-        return ActiveRecord::Import::Result.new([], 0) if args.last.empty?
+        return ActiveRecord::Import::Result.new([], 0, nil) if args.last.empty?
         # supports 2-element array and array
       elsif args.size == 2 and args.first.is_a?( Array ) and args.last.is_a?( Array )
         column_names, array_of_attributes = args
@@ -218,8 +219,8 @@ class ActiveRecord::Base
       return_obj = if is_validating
         import_with_validations( column_names, array_of_attributes, options )
       else
-        num_inserts = import_without_validations_or_callbacks( column_names, array_of_attributes, options )
-        ActiveRecord::Import::Result.new([], num_inserts)
+        [num_inserts, last_inserted_id] = import_without_validations_or_callbacks( column_names, array_of_attributes, options )
+        ActiveRecord::Import::Result.new([], num_inserts, last_inserted_id)
       end
 
       if options[:synchronize]
@@ -261,12 +262,12 @@ class ActiveRecord::Base
       end
       array_of_attributes.compact!
 
-      num_inserts = if array_of_attributes.empty? || options[:all_or_none] && failed_instances.any?
-                      0
+      num_inserts, last_inserted_id = if array_of_attributes.empty? || options[:all_or_none] && failed_instances.any?
+                      [0, nil]
                     else
                       import_without_validations_or_callbacks( column_names, array_of_attributes, options )
                     end
-      ActiveRecord::Import::Result.new(failed_instances, num_inserts)
+      ActiveRecord::Import::Result.new(failed_instances, num_inserts, last_inserted_id)
     end
     
     # Imports the passed in +column_names+ and +array_of_attributes+
@@ -276,6 +277,7 @@ class ActiveRecord::Base
     # information on +column_names+, +array_of_attributes_ and
     # +options+.
     def import_without_validations_or_callbacks( column_names, array_of_attributes, options={} )
+      number_inserted, last_inserted_id = 0, nil
       scope_columns, scope_values = scope_attributes.to_a.transpose
 
       unless scope_columns.blank?
@@ -305,11 +307,11 @@ class ActiveRecord::Base
         post_sql_statements = connection.post_sql_statements( quoted_table_name, options )
         
         # perform the inserts
-        number_inserted = connection.insert_many( [ insert_sql, post_sql_statements ].flatten, 
+        number_inserted, last_inserted_id = connection.insert_many( [ insert_sql, post_sql_statements ].flatten, 
                                                   values_sql,
                                                   "#{self.class.name} Create Many Without Validations Or Callbacks" )
       end
-      number_inserted
+      [number_inserted, last_inserted_id]
     end
 
     private

@@ -34,7 +34,7 @@ module ActiveRecord::Import::AbstractAdapter
     # elements that are in position >= 1 will be appended to the final SQL.
     def insert_many( sql, values, *args ) # :nodoc:
       # the number of inserts default
-      number_of_inserts = 0
+      number_of_inserts, last_inserted_id = 0, nil
     
       base_sql,post_sql = if sql.is_a?( String )
         [ sql, '' ]
@@ -59,17 +59,17 @@ module ActiveRecord::Import::AbstractAdapter
       if NO_MAX_PACKET == max or total_bytes < max
         number_of_inserts += 1
         sql2insert = base_sql + values.join( ',' ) + post_sql
-        insert( sql2insert, *args )
+        last_inserted_id = insert( sql2insert, *args )
       else
         value_sets = self.class.get_insert_value_sets( values, sql_size, max )
         value_sets.each do |values|
           number_of_inserts += 1
           sql2insert = base_sql + values.join( ',' ) + post_sql
-          insert( sql2insert, *args )
+          last_inserted_id = insert( sql2insert, *args )
         end
       end
 
-      number_of_inserts
+      [number_of_inserts, last_inserted_id]
     end
 
     def pre_sql_statements(options)
